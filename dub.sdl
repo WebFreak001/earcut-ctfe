@@ -1,0 +1,5 @@
+name "earcut-ctfe"
+description "CTFE compatible D port (using GC) of the earcut polygon triangulation library."
+authors "Ferhat Kurtulmuş" "Jan Jurzitza"
+copyright "Copyright © 2020-2024, Ferhat Kurtulmuş, Jan Jurzitza"
+license "BSL-1.0"

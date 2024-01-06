@@ -1,23 +1,19 @@
-  
-/** D port (betterC) of the earcut polygon triangulation library.
-    
-    Ported from: https://github.com/mapbox/earcut.hpp
+
+/** CTFE compatible D port (using GC) of the earcut polygon triangulation library.
+
+    Ported from:
+    https://github.com/aferust/earcut-d (nogc / betterC compatible)
+    which was ported from:
+    https://github.com/mapbox/earcut.hpp
 
 Copyright:
- Copyright (c) 2020, Ferhat Kurtulmuş.
+ Copyright (c) 2020, Ferhat Kurtulmuş
+           (c) 2024, Jan Jurzitza
  License:
    $(HTTP www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
 */
 
-module earcutd;
-
-version(LDC){
-    version(D_BetterC){
-        pragma(LDC_no_moduleinfo);
-    }
-}
-
-import dvector;
+module earcut_ctfe;
 
 private {
     import core.stdc.stdlib;
@@ -25,7 +21,6 @@ private {
     import std.traits: isArray;
     import std.range.primitives: isRandomAccessRange;
     import std.math;
-    import std.stdint;
     import std.algorithm.comparison: min, max;
 }
 
@@ -38,7 +33,7 @@ struct Earcut(N, Polygon) {
         alias VecPoint = ASeq[0];
     } else
         static assert(0, typeof(Polygon).stringof ~ " type is not supported.");
-    
+
     static if (isArray!VecPoint){
         alias Point = typeof(VecPoint.init[0]);
     } else static if (isRandomAccessRange!VecPoint){
@@ -47,32 +42,32 @@ struct Earcut(N, Polygon) {
     } else
         static assert(0, typeof(VecPoint).stringof ~ " type is not supported. You must use a slice or a RandomAccessRange");
 
-    Dvector!N indices;
+    N[] indices;
     size_t vertices = 0;
 
-    struct Node {
-        
+    static class Node {
         N i;
         double x;
         double y;
-        
-    @nogc nothrow:
-        int opCmp(Node rhs) {
+
+        override int opCmp(Object rhsO) {
+            auto rhs = cast(Node) rhsO;
+            assert(rhs);
             if (x < rhs.x) return -1;
             if (rhs.x < x) return 1;
             return 0;
         }
 
         // previous and next vertice nodes in a polygon ring
-        Node* prev;
-        Node* next;
+        Node prev;
+        Node next;
 
         // z-order curve value
-        int32_t z;
+        int z;
 
         // previous and next nodes in z-order
-        Node* prevZ;
-        Node* nextZ;
+        Node prevZ;
+        Node nextZ;
 
         // indicates whether this is a steiner point
         bool steiner = false;
@@ -90,7 +85,6 @@ struct Earcut(N, Polygon) {
     double inv_size = 0.0;
 
     struct ObjectPool(T) {
-        @nogc nothrow:
         public:
         this(size_t blockSize_) {
             reset(blockSize_);
@@ -99,40 +93,40 @@ struct Earcut(N, Polygon) {
             clear();
         }
 
-        T* construct(N)(N i, double x, double y) {
+        ref T next()
+        {
+            return currentBlock[currentIndex++];
+        }
+
+        T construct(N)(N i, double x, double y) {
             if (currentIndex >= blockSize) {
-                currentBlock = cast(T*)malloc(blockSize*T.sizeof);
-                allocations.pushBack(currentBlock);
+                currentBlock = new T[blockSize];
+                allocations ~= currentBlock;
                 currentIndex = 0;
             }
-            T* object = &currentBlock[currentIndex++];
-            *object = T(i, x, y);
-            return object;
+
+            return next = new T(i, x, y);
         }
+
         void reset(size_t newBlockSize) {
-            foreach (allocation; allocations) {
-                core.stdc.stdlib.free(allocation);
-            }
-            allocations.free();
+            allocations = null;
             blockSize = max(1, newBlockSize);
             currentBlock = null;
             currentIndex = blockSize;
         }
         void clear() { reset(blockSize); }
         private:
-        T* currentBlock = null;
+        T[] currentBlock = null;
         size_t currentIndex = 1;
         size_t blockSize = 1;
-        Dvector!(T*) allocations;
+        T[][] allocations;
     }
 
     ObjectPool!Node nodes;
-    
-    @nogc nothrow:
 
-    void run(ref Polygon points){
+    void run(Polygon points){
         // reset
-        indices.free;
+        indices = null;
         vertices = 0;
 
         if (!points.length) return;
@@ -151,7 +145,7 @@ struct Earcut(N, Polygon) {
         nodes.reset(len * 3 / 2);
         indices.reserve(len + points[0].length);
 
-        Node* outerNode = linkedList(points[0], true);
+        Node outerNode = linkedList(points[0], true);
         if (!outerNode || outerNode.prev == outerNode.next) return;
 
         if (points.length > 1) outerNode = eliminateHoles(points, outerNode);
@@ -159,7 +153,7 @@ struct Earcut(N, Polygon) {
         // if the shape is not too simple, we'll use z-order curve hash later; calculate polygon bbox
         hashing = threshold < 0;
         if (hashing) {
-            Node* p = outerNode.next;
+            Node p = outerNode.next;
             minX = maxX = outerNode.x;
             minY = maxY = outerNode.y;
             do {
@@ -179,15 +173,15 @@ struct Earcut(N, Polygon) {
 
         earcutLinked(outerNode);
 
-        nodes.clear();        
+        nodes.clear();
     }
 
-    Node* linkedList(Ring)(ref Ring points, const bool clockwise) {
+    Node linkedList(Ring)(ref Ring points, const bool clockwise) {
         //using Point = typename Ring::value_type;
         double sum = 0;
         const size_t len = points.length;
         size_t i, j;
-        Node* last = null;
+        Node last = null;
 
         // calculate original winding order of a polygon ring
         for (i = 0, j = len > 0 ? len - 1 : 0; i < len; j = i++) {
@@ -197,7 +191,7 @@ struct Earcut(N, Polygon) {
             const double p10 = p1[0];
             const double p11 = p1[1];
             const double p21 = p2[1];
-            
+
             sum += (p20 - p10) * (p11 + p21);
         }
 
@@ -218,10 +212,10 @@ struct Earcut(N, Polygon) {
         return last;
     }
 
-    Node* filterPoints(Node* start, Node* end = null){
+    Node filterPoints(Node start, Node end = null){
         if (!end) end = start;
 
-        Node* p = start;
+        Node p = start;
         bool again;
         do {
             again = false;
@@ -241,15 +235,15 @@ struct Earcut(N, Polygon) {
         return end;
     }
 
-    void earcutLinked(Node* ear, int pass = 0){
+    void earcutLinked(Node ear, int pass = 0){
         if (!ear) return;
 
         // interlink polygon nodes in z-order
         if (!pass && hashing) indexCurve(ear);
 
-        Node* stop = ear;
-        Node* prev;
-        Node* next;
+        Node stop = ear;
+        Node prev;
+        Node next;
 
         int iterations = 0;
 
@@ -261,9 +255,9 @@ struct Earcut(N, Polygon) {
 
             if (hashing ? isEarHashed(ear) : isEar(ear)) {
                 // cut off the triangle
-                indices.pushBack(prev.i);
-                indices.pushBack(ear.i);
-                indices.pushBack(next.i);
+                indices ~= prev.i;
+                indices ~= ear.i;
+                indices ~= next.i;
 
                 removeNode(ear);
 
@@ -295,15 +289,15 @@ struct Earcut(N, Polygon) {
 
     }
 
-    bool isEar(Node* ear) {
-        Node* a = ear.prev;
-        Node* b = ear;
-        Node* c = ear.next;
+    bool isEar(Node ear) {
+        Node a = ear.prev;
+        Node b = ear;
+        Node c = ear.next;
 
         if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
 
         // now make sure we don't have other points inside the potential ear
-        Node* p = ear.next.next;
+        Node p = ear.next.next;
 
         while (p != ear.prev) {
             if (pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) &&
@@ -314,10 +308,10 @@ struct Earcut(N, Polygon) {
         return true;
     }
 
-    bool isEarHashed(Node* ear) {
-        Node* a = ear.prev;
-        Node* b = ear;
-        Node* c = ear.next;
+    bool isEarHashed(Node ear) {
+        Node a = ear.prev;
+        Node b = ear;
+        Node c = ear.next;
 
         if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
 
@@ -328,11 +322,11 @@ struct Earcut(N, Polygon) {
         const double maxTY = max(a.y, max(b.y, c.y));
 
         // z-order range for the current triangle bbox;
-        const int32_t minZ = zOrder(minTX, minTY);
-        const int32_t maxZ = zOrder(maxTX, maxTY);
+        const int minZ = zOrder(minTX, minTY);
+        const int maxZ = zOrder(maxTX, maxTY);
 
         // first look for points inside the triangle in increasing z-order
-        Node* p = ear.nextZ;
+        Node p = ear.nextZ;
 
         while (p && p.z <= maxZ) {
             if (p != ear.prev && p != ear.next &&
@@ -354,17 +348,17 @@ struct Earcut(N, Polygon) {
         return true;
     }
 
-    Node* cureLocalIntersections(Node* start) {
-        Node* p = start;
+    Node cureLocalIntersections(Node start) {
+        Node p = start;
         do {
-            Node* a = p.prev;
-            Node* b = p.next.next;
+            Node a = p.prev;
+            Node b = p.next.next;
 
             // a self-intersection where edge (v[i-1],v[i]) intersects (v[i+1],v[i+2])
             if (!equals(a, b) && intersects(a, p, p.next, b) && locallyInside(a, b) && locallyInside(b, a)) {
-                indices.pushBack(a.i);
-                indices.pushBack(p.i);
-                indices.pushBack(b.i);
+                indices ~= a.i;
+                indices ~= p.i;
+                indices ~= b.i;
 
                 // remove two nodes involved
                 removeNode(p);
@@ -378,15 +372,15 @@ struct Earcut(N, Polygon) {
         return filterPoints(p);
     }
 
-    void splitEarcut(Node* start) {
+    void splitEarcut(Node start) {
         // look for a valid diagonal that divides the polygon into two
-        Node* a = start;
+        Node a = start;
         do {
-            Node* b = a.next.next;
+            Node b = a.next.next;
             while (b != a.prev) {
                 if (a.i != b.i && isValidDiagonal(a, b)) {
                     // split the polygon in two by the diagonal
-                    Node* c = splitPolygon(a, b);
+                    Node c = splitPolygon(a, b);
 
                     // filter colinear points around the cuts
                     a = filterPoints(a, a.next);
@@ -403,21 +397,21 @@ struct Earcut(N, Polygon) {
         } while (a != start);
     }
 
-    Node* eliminateHoles(Polygon)(ref Polygon points, Node* outerNode){
+    Node eliminateHoles(Polygon)(ref Polygon points, Node outerNode){
         const size_t len = points.length;
 
-        Dvector!(Node*) queue;
+        Node[] queue;
         for (size_t i = 1; i < len; i++) {
-            Node* list = linkedList(points[i], false);
+            Node list = linkedList(points[i], false);
             if (list) {
                 if (list == list.next) list.steiner = true;
-                queue.pushBack(getLeftmost(list));
+                queue ~= getLeftmost(list);
             }
         }
-        
+
         import std.algorithm.sorting;
-        
-        auto _q = queue.slice.sort!("a < b");
+
+        auto _q = queue.sort!("a < b");
 
         // process holes from left to right
         for (size_t i = 0; i < queue.length; i++) {
@@ -425,14 +419,13 @@ struct Earcut(N, Polygon) {
             outerNode = filterPoints(outerNode, outerNode.next);
         }
 
-        queue.free;
         return outerNode;
     }
 
-    void eliminateHole(Node* hole, Node* outerNode) {
+    void eliminateHole(Node hole, Node outerNode) {
         outerNode = findHoleBridge(hole, outerNode);
         if (outerNode) {
-            Node* b = splitPolygon(outerNode, hole);
+            Node b = splitPolygon(outerNode, hole);
 
             // filter out colinear points around cuts
             filterPoints(outerNode, outerNode.next);
@@ -441,12 +434,12 @@ struct Earcut(N, Polygon) {
     }
 
 // David Eberly's algorithm for finding a bridge between hole and outer polygon
-    Node* findHoleBridge(Node* hole, Node* outerNode) {
-        Node* p = outerNode;
+    Node findHoleBridge(Node hole, Node outerNode) {
+        Node p = outerNode;
         double hx = hole.x;
         double hy = hole.y;
         double qx = -double.max;
-        Node* m = null;
+        Node m = null;
 
         // find a segment intersected by a ray from the hole's leftmost Vertex to the left;
         // segment's endpoint with lesser x will be potential connection Vertex
@@ -473,7 +466,7 @@ struct Earcut(N, Polygon) {
         // if there are no points found, we have a valid connection;
         // otherwise choose the Vertex of the minimum angle with the ray as connection Vertex
 
-        Node* stop = m;
+        Node stop = m;
         double tanMin = double.max;
         double tanCur = 0;
 
@@ -500,13 +493,13 @@ struct Earcut(N, Polygon) {
         return m;
     }
 
-    bool sectorContainsSector(Node* m, Node* p) {
+    bool sectorContainsSector(Node m, Node p) {
         return area(m.prev, m, p.prev) < 0 && area(p.next, m, m.next) < 0;
     }
 
-    void indexCurve(Node* start) {
+    void indexCurve(Node start) {
         assert(start);
-        Node* p = start;
+        Node p = start;
 
         do {
             p.z = p.z ? p.z : zOrder(p.x, p.y);
@@ -521,12 +514,12 @@ struct Earcut(N, Polygon) {
         sortLinked(p);
     }
 
-    Node* sortLinked(Node* list) {
+    Node sortLinked(Node list) {
         assert(list);
-        Node* p;
-        Node* q;
-        Node* e;
-        Node* tail;
+        Node p;
+        Node q;
+        Node e;
+        Node tail;
         int i, numMerges, pSize, qSize;
         int inSize = 1;
 
@@ -586,10 +579,10 @@ struct Earcut(N, Polygon) {
         }
     }
 
-    int32_t zOrder(const double x_, const double y_) {
+    int zOrder(const double x_, const double y_) {
         // coords are transformed into non-negative 15-bit integer range
-        int32_t x = cast(int32_t)(32767.0 * (x_ - minX) * inv_size);
-        int32_t y = cast(int32_t)(32767.0 * (y_ - minY) * inv_size);
+        int x = cast(int)(32767.0 * (x_ - minX) * inv_size);
+        int y = cast(int)(32767.0 * (y_ - minY) * inv_size);
 
         x = (x | (x << 8)) & 0x00FF00FF;
         x = (x | (x << 4)) & 0x0F0F0F0F;
@@ -603,10 +596,10 @@ struct Earcut(N, Polygon) {
 
         return x | (y << 1);
     }
-    
-    Node* getLeftmost(Node* start) {
-        Node* p = start;
-        Node* leftmost = start;
+
+    Node getLeftmost(Node start) {
+        Node p = start;
+        Node leftmost = start;
         do {
             if (p.x < leftmost.x || (p.x == leftmost.x && p.y < leftmost.y))
                 leftmost = p;
@@ -615,29 +608,29 @@ struct Earcut(N, Polygon) {
 
         return leftmost;
     }
-    
+
     bool pointInTriangle(double ax, double ay, double bx, double by, double cx, double cy, double px, double py) const {
         return (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0 &&
             (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0 &&
             (bx - px) * (cy - py) - (cx - px) * (by - py) >= 0;
     }
 
-    bool isValidDiagonal(Node* a, Node* b) {
+    bool isValidDiagonal(Node a, Node b) {
         return a.next.i != b.i && a.prev.i != b.i && !intersectsPolygon(a, b) && // dones't intersect other edges
             ((locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && // locally visible
                 (area(a.prev, a, b.prev) != 0.0 || area(a, b.prev, b) != 0.0)) || // does not create opposite-facing sectors
                 (equals(a, b) && area(a.prev, a, a.next) > 0 && area(b.prev, b, b.next) > 0)); // special zero-length case
     }
 
-    double area(Node* p, Node* q, Node* r) const {
+    double area(Node p, Node q, Node r) const {
         return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
     }
 
-    bool equals(Node* p1, Node* p2) {
+    bool equals(Node p1, Node p2) {
         return p1.x == p2.x && p1.y == p2.y;
     }
 
-    bool intersects(Node* p1, Node* q1, Node* p2, Node* q2) {
+    bool intersects(Node p1, Node q1, Node p2, Node q2) {
         int o1 = sign(area(p1, q1, p2));
         int o2 = sign(area(p1, q1, q2));
         int o3 = sign(area(p2, q2, p1));
@@ -653,7 +646,7 @@ struct Earcut(N, Polygon) {
         return false;
     }
 
-    bool onSegment(Node* p, Node* q, Node* r) {
+    bool onSegment(Node p, Node q, Node r) {
         return q.x <= max(p.x, r.x) &&
             q.x >= min(p.x, r.x) &&
             q.y <= max(p.y, r.y) &&
@@ -664,8 +657,8 @@ struct Earcut(N, Polygon) {
         return (0.0 < val) - (val < 0.0);
     }
 
-    bool intersectsPolygon(Node* a, Node* b) {
-        Node* p = a;
+    bool intersectsPolygon(Node a, Node b) {
+        Node p = a;
         do {
             if (p.i != a.i && p.next.i != a.i && p.i != b.i && p.next.i != b.i &&
                     intersects(p, p.next, a, b)) return true;
@@ -675,14 +668,14 @@ struct Earcut(N, Polygon) {
         return false;
     }
 
-    bool locallyInside(Node* a, Node* b) {
+    bool locallyInside(Node a, Node b) {
         return area(a.prev, a, a.next) < 0 ?
             area(a, b, a.next) >= 0 && area(a, a.prev, b) >= 0 :
             area(a, b, a.prev) < 0 || area(a, a.next, b) < 0;
     }
 
-    bool middleInside(Node* a, Node* b) {
-        Node* p = a;
+    bool middleInside(Node a, Node b) {
+        Node p = a;
         bool inside = false;
         double px = (a.x + b.x) / 2;
         double py = (a.y + b.y) / 2;
@@ -695,12 +688,12 @@ struct Earcut(N, Polygon) {
 
         return inside;
     }
-    
-    Node* splitPolygon(Node* a, Node* b) {
-        Node* a2 = nodes.construct(a.i, a.x, a.y);
-        Node* b2 = nodes.construct(b.i, b.x, b.y);
-        Node* an = a.next;
-        Node* bp = b.prev;
+
+    Node splitPolygon(Node a, Node b) {
+        Node a2 = nodes.construct(a.i, a.x, a.y);
+        Node b2 = nodes.construct(b.i, b.x, b.y);
+        Node an = a.next;
+        Node bp = b.prev;
 
         a.next = b;
         b.prev = a;
@@ -717,8 +710,8 @@ struct Earcut(N, Polygon) {
         return b2;
     }
 
-    Node* insertNode(size_t i, ref Point pt, Node* last) {
-        Node* p = nodes.construct(cast(N)i, pt[0], pt[1]);
+    Node insertNode(size_t i, ref Point pt, Node last) {
+        Node p = nodes.construct(cast(N)i, pt[0], pt[1]);
 
         if (!last) {
             p.prev = p;
@@ -734,7 +727,7 @@ struct Earcut(N, Polygon) {
         return p;
     }
 
-    void removeNode(Node* p) {
+    void removeNode(Node p) {
         p.next.prev = p.prev;
         p.prev.next = p.next;
 
@@ -748,7 +741,6 @@ struct Earcut(N, Polygon) {
 struct Pair(T){
     T x;
     T y;
-    @nogc nothrow:
     inout(T) opIndex(size_t index) inout {
         T[2] tmp = [x, y];
         return tmp[index];
